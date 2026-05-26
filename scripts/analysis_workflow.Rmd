@@ -1,0 +1,208 @@
+---
+title: "Reproducible Scientific Reporting in R and LaTeX"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+# Overview
+
+This workflow demonstrates how to generate reproducible analytical outputs from a structured modeling dataset. The analysis loads simulated longitudinal data, fits statistical models, creates publication-style figures, and exports LaTeX-ready tables for integration into a scientific report.
+
+# Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+
+set.seed(123)
+```
+
+## Packages
+
+```{r packages}
+if (!require("pacman")) install.packages("pacman")
+
+pacman::p_load(
+  tidyverse,
+  data.table,
+  here,
+  glmmTMB,
+  modelsummary,
+  broom.mixed,
+  ggeffects,
+  kableExtra
+)
+```
+
+# Load Data
+
+```{r load-data}
+df_models <- fread(
+  here("data", "simulated_df_models.csv")
+)
+
+glimpse(df_models)
+```
+
+# Prepare Data
+
+```{r prepare-data}
+df_models <- df_models %>%
+  mutate(
+    id = factor(id),
+    group = factor(group),
+    period = factor(period)
+  )
+```
+
+
+# Exploratory Visualization
+
+```{r exploratory-figure, fig.width=7, fig.height=5}
+p_behavior <- df_models %>%
+  ggplot(aes(rank_prop, behavior_count)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    title = "Behavior Counts by Dominance Rank",
+    x = "Proportional Dominance Rank",
+    y = "Behavior Count"
+  ) +
+  theme_minimal()
+
+p_behavior
+```
+
+```{r save-exploratory-figure}
+dir.create(here("figures"), recursive = TRUE, showWarnings = FALSE)
+
+ggsave(
+  filename = here("figures", "behavior_by_rank.png"),
+  plot = p_behavior,
+  width = 7,
+  height = 5
+)
+```
+
+
+# Statistical Modeling
+
+```{r fit-models}
+m_rank <- glmmTMB(
+  behavior_count ~ rank_z + offset(log(time_observed)) + (1 | id),
+  family = nbinom2,
+  data = df_models
+)
+
+m_rank_color <- glmmTMB(
+  behavior_count ~ rank_z + rg_z + offset(log(time_observed)) + (1 | id),
+  family = nbinom2,
+  data = df_models
+)
+```
+
+
+# Model Summary Table
+
+```{r model-summary-table}
+dir.create(here("tables"), recursive = TRUE, showWarnings = FALSE)
+
+models <- list(
+  "Rank only" = m_rank,
+  "Rank + RG" = m_rank_color
+)
+
+coef_map <- c(
+  "rank_z" = "Dominance rank (z)",
+  "rg_z" = "RG opponency (z)"
+)
+
+modelsummary(
+  models,
+  coef_map = coef_map,
+  statistic = "({std.error})",
+  stars = TRUE,
+  output = here("tables", "model_summary.tex")
+)
+```
+
+
+# Predicted Effects
+
+```{r predicted-effects, fig.width=6, fig.height=5}
+pred_rg <- ggpredict(
+  m_rank_color,
+  terms = "rg_z"
+)
+
+p_pred_rg <- ggplot() +
+  geom_point(
+    data = df_models,
+    aes(
+      x = rg_z,
+      y = behavior_count,
+      color = rg_z
+    ),
+    alpha = 0.8,
+    size = 2.2
+  ) +
+  geom_ribbon(
+    data = pred_rg,
+    aes(
+      x = x,
+      ymin = conf.low,
+      ymax = conf.high
+    ),
+    alpha = 0.25,
+    fill = "#B22222"
+  ) +
+  geom_line(
+    data = pred_rg,
+    aes(x = x, y = predicted),
+    linewidth = 1,
+    color = "#7A0000"
+  ) +
+  scale_color_gradient(
+    low = "#FFD6D6",
+    high = "#7A0000"
+  ) +
+  labs(
+    title = "Predicted Behavioral Counts",
+    x = "Standardized RG Opponency",
+    y = "Behavior Count",
+    color = "RG Opponency"
+  ) +
+  theme_minimal()
+
+p_pred_rg
+```
+
+```{r save-predicted-effects}
+ggsave(
+  filename = here("figures", "predicted_rg_effect.png"),
+  plot = p_pred_rg,
+  width = 6,
+  height = 5
+)
+```
+
+
+# Export Complete Results
+
+```{r export-results}
+dir.create(here("output"), recursive = TRUE, showWarnings = FALSE)
+
+fwrite(
+  broom.mixed::tidy(m_rank_color),
+  here("output", "model_coefficients.csv")
+)
+```
+
+# Summary
+
+This workflow illustrates an end-to-end reproducible reporting pipeline: simulated longitudinal data are analyzed using mixed-effects models, results are exported as LaTeX-ready tables, and figures are saved as publication-ready files.
